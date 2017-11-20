@@ -23,10 +23,11 @@ Axiom ImplicationDistribution : exists c : nat, forall (P Q : Prop), forall a b,
 (* Property 2 *)
 Axiom QuantifierDistribution :
   exists c : nat, forall (phi : nat -> Prop) N, [[ forall k, phi k ]]_ N -> forall k, [[ phi k ]]_(c * Log k).
-(* TODO: this is a little unsound as stated since there maybe should be a large
-   additive constant added to [c * Log k] *)
+(* TODO: this is a little sketchy. There should be an additive constant dependent on N.
+   See Section 4.2 in the paper. *)
 
-(* Property 2, for quantification restricted to numbers bounded below. TODO - reasonable? *)
+(* Property 2, for quantification restricted to numbers bounded below. TODO: verify that this is
+   reasonable. *)
 Axiom RestrictedQuantifierDistribution :
   exists c : nat, forall (phi : nat -> Prop) N k0, [[ forall k, k > k0 -> phi k ]]_ N -> forall k, k > k0 -> [[ phi k ]]_(c * Log k).
 
@@ -96,16 +97,18 @@ Section BoundedLob.
   Axiom g_bound_below : g ≻ Log.
   Axiom g_bound_above : f ≻ (fun k => Epsilon (g k)).
 
+  (* [G phi k] represents what is written as G(⌜φ⌝,k) in the paper. (The quasi-quoting is elided.) *)
   Definition G (phi : nat -> Prop) (k : nat) : Prop := [[ phi k ]]_(g k) -> p k.
 
   (* Differences from the paper:
-     - it's easier to specialize to -> before applying necessitation and quantifier
-       distribution, so we don't have to fiddle around inside boxes inside quantifiers.
+     - to avoid fiddling around inside boxes inside quantifiers, we split up Step1a and Step1b
+       (forward and reverse directions of the iff which defines G).
      - we don't use Big-O notation, instead doing explicit existential quantification
-       over constants *)
+       over constants. the assumptions are currently slightly sketchy. *)
 
   Definition psi := ParametricDiagonalLemmaPsi G.
 
+  (* The forward direction of Equation 5.3 *)
   Lemma Step1a : exists n, |-(n) forall k, psi k -> G psi k.
   Proof.
     apply ProofsAreBounded.
@@ -267,6 +270,7 @@ Section BoundedLob.
     auto.
   Qed.
 
+  (* The reverse direction of Equation 5.3 *)
   Lemma Step1b : exists n, |-(n) forall k, G psi k -> psi k.
   Proof.
     apply ProofsAreBounded.
