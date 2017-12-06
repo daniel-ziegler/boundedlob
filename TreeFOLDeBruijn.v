@@ -45,7 +45,7 @@ Inductive expr (Gamma: mapping) : type -> Type :=
 | recur : forall t,
     forall (eleaf: expr Gamma t)
       (enode: expr (t :: t :: Gamma) t)
-      (v: expr Gamma tree),
+      (e: expr Gamma tree),
       expr Gamma t.
 Arguments nil {Gamma}.
 Infix "◁" := eats (at level 15, left associativity).
@@ -784,3 +784,158 @@ Proof.
   auto using hereditary_termination_terminating, exprs_ht.
 Qed.
 
+Inductive Tree := Nil | Eats (t e: Tree).
+
+Notation "⋅" := Nil.
+Infix "△" := Eats (at level 16, left associativity).
+
+Fixpoint type_denote (t: type) : Type :=
+  match t with
+  | tree => Tree
+  | arrow t1 t2 => type_denote t1 -> type_denote t2
+  end.
+
+Definition denote_context Gamma :=
+  forall t (v: variable Gamma t), type_denote t.
+
+Definition empty_denote_context : denote_context [] :=
+  fun t v => match v in (variable m t0) return (match m with
+                                             | [] => type_denote t
+                                             | _ :: _ => unit
+                                             end) with
+          | var_here _ _ => tt
+          | var_outer _ _ => tt
+          end.
+
+Program Definition denote_context_insert
+        Gamma t
+        (x: type_denote t)
+        (c: denote_context Gamma) : denote_context (t :: Gamma) :=
+  fun t' (v: variable (t :: Gamma) t') =>
+    match v with
+      | var_here _ _ => x
+      | var_outer _ v' => c _ v'
+    end.
+
+Fixpoint Tree_rec_nondep {T: Type} (z: T) (f: T -> T -> T) (t: Tree) : T :=
+  match t with
+  | ⋅ => z
+  | t1 △ t2 => f (Tree_rec_nondep z f t1) (Tree_rec_nondep z f t2)
+  end.
+
+Fixpoint expr_denote Gamma (c: denote_context Gamma) t (e: expr Gamma t) : type_denote t :=
+  match e with
+  | var v => c _ v
+  | nil => ⋅
+  | eats e1 e2 => expr_denote c e1 △ expr_denote c e2
+  | abs e => fun x => expr_denote (denote_context_insert x c) e
+  | app e1 e2 => (expr_denote c e1) (expr_denote c e2)
+  | @recur _ t ez ef et => Tree_rec_nondep
+                            (expr_denote c ez)
+                            (fun x1 x2 => (expr_denote
+                                          (denote_context_insert x1 (denote_context_insert x2 c))
+                                          ef))
+                            (expr_denote c et)
+  end.
+
+Arguments var_here {_} {_}.
+Arguments var_outer {_} {_} {_} _.
+
+Definition x0 {Gamma t0} := @var (t0 :: Gamma) t0 var_here.
+Definition x1 {Gamma t0 t1} := @var (t0 :: t1 :: Gamma) t1 (var_outer var_here).
+
+Definition id t := abs x0 : expr [] (arrow t t).
+Definition K t1 t2 := abs (abs x1) : expr [] (arrow t1 (arrow t2 t1)).
+Definition flip := abs (recur nil (x1 ◁ x0) x0) : expr [] (arrow tree tree).
+
+Eval lazy in expr_denote empty_denote_context (id tree).
+Eval lazy in expr_denote empty_denote_context (K tree (arrow tree tree)).
+Eval lazy in expr_denote empty_denote_context flip.
+Eval lazy in expr_denote empty_denote_context (app flip (nil ◁ nil ◁ nil)).
+
+Fixpoint encode_var Gamma t (v: variable Gamma t) : Tree :=
+  match v with
+  | var_here => ⋅
+  | var_outer v' => encode_var v' △ ⋅
+  end.
+
+Fixpoint encode_expr Gamma t (e: expr Gamma t) : Tree :=
+  match e with
+  | var v => ⋅ △ encode_var v
+  | nil => ⋅
+  | eats e1 e2 => (⋅ △ ⋅) △ (encode_expr e1 △ encode_expr e2)
+  | abs e' => (⋅ △ ⋅ △ ⋅) △ encode_expr e'
+  | app e1 e2 => (⋅ △ (⋅ △ ⋅)) △ (encode_expr e1 △ encode_expr e2)
+  | recur ez ef et => ((⋅ △ ⋅) △ (⋅ △ ⋅)) △ (encode_expr ez △ encode_expr ef △ encode_expr et)
+  end.
+
+Eval lazy in encode_expr flip.
+
+Theorem encode_var_injective : forall Gamma t (v1 v2: variable Gamma t),
+    encode_var v1 = encode_var v2 -> v1 = v2.
+Proof.
+  induction v1; intros; dependent destruction v2; try discriminate.
+  - auto.
+  - simpl in H.
+    inversion H.
+    f_equal.
+    auto.
+Qed.
+Hint Resolve encode_var_injective.
+
+(* 
+Theorem encode_expr_injective : forall Gamma t (e1 e2: expr Gamma t),
+    encode_expr e1 = encode_expr e2 -> e1 = e2.
+Proof.
+  induction e1; intros; dependent destruction e2; try discriminate;
+    simpl in H; inversion H; f_equal; auto.
+  (* Oops, only true for type-erased version... *)
+Abort.
+*)
+
+Fixpoint encoded_context_lookup (n: Tree) (c: list Tree) : option Tree :=
+  match n, c with
+  | ⋅, v :: _ => Some v
+  | n' △ ⋅, _ :: c' => encoded_context_lookup n' c'
+  | _, _ => None
+  end.
+
+(* TODO: does our interpreter need type tags at runtime?
+   otherwise it can't do most runtime type checking, but maybe it doesn't need to *)
+(* TODO: we know it's terminating; fuel should be unnecessary *)
+Fixpoint eval_encoded_expr (fuel: nat) (c: list Tree) (e: Tree) {struct fuel} : option Tree :=
+  match fuel with
+  | O => None
+  | S fuel' =>
+    match e with
+    | (* var v *) ⋅ △ v => encoded_context_lookup v c
+    | (* nil *) ⋅ => Some ⋅
+    | (* eats e1 e2 *) (⋅ △ ⋅) △ (e1 △ e2) =>
+      match eval_encoded_expr fuel' c e1, eval_encoded_expr fuel' c e2 with
+      | Some t1, Some t2 => Some (t1 △ t2)
+      | _, _ => None
+      end
+    | (* abs e' *) (⋅ △ ⋅ △ ⋅) △ e' => Some e' (* no type tags -> ambiguous with tree values *)
+    | (* app ef ex *) (⋅ △ (⋅ △ ⋅)) △ (ef △ ex) =>
+      match eval_encoded_expr fuel' c ef, eval_encoded_expr fuel' c ex with
+      | Some f, Some x => eval_encoded_expr fuel' (x :: c) f
+      | _, _ => None
+      end
+    | (* recur ez f et *) ((⋅ △ ⋅) △ (⋅ △ ⋅)) △ (ez △ f △ et) =>
+      match eval_encoded_expr fuel' c et with
+      | Some t => Tree_rec_nondep (eval_encoded_expr fuel' c ez)
+                                 (fun (t1 t2: option Tree) =>
+                                    match t1, t2 with
+                                    | Some t1', Some t2' =>
+                                      eval_encoded_expr fuel' (t1' :: t2' :: c) f
+                                    | _, _ => None
+                                    end)
+                                 t
+      | None => None
+      end
+    | _ => None
+    end
+  end.
+
+Eval lazy in expr_denote empty_denote_context (app flip (nil ◁ nil ◁ nil)).
+Eval lazy in eval_encoded_expr 20 [] (encode_expr (app flip (nil ◁ nil ◁ nil))).
