@@ -3,14 +3,21 @@ Require Import Omega.
 Set Implicit Arguments.
 Set Universe Polymorphism.
 
+Parameter IsProvableOutside : Prop -> Prop.
 Parameter IsBoundedlyProvableOutside : nat -> Prop -> Prop.
 Parameter IsBoundedlyProvable : nat -> Prop -> Prop.
 
-Notation "[[ p ]]_ n" := (IsBoundedlyProvable n p) (at level 50).
+(* The metalogical statement that p is provable in the logic *)
+Notation "|- p" := (IsProvableOutside p) (at level 105, no associativity).
+
+(* The metalogical statement that p is provable in n steps in the logic *)
 Notation "|-( n ) p" := (IsBoundedlyProvableOutside n p) (at level 105, no associativity).
 
-Axiom ProofsAreBounded : forall P : Prop, P -> exists N, |-(N) P.
-Axiom BoundedProofsAreProofs : forall (P : Prop) N, (|-(N) P) -> P. (* a bit sketchy *)
+(* Encoded within the logic, the statement that p is provable in n steps in the logic *)
+Notation "[[ p ]]_ n" := (IsBoundedlyProvable n p) (at level 50).
+
+Axiom ProofsAreBounded : forall P : Prop, |- P -> exists N, |-(N) P.
+Axiom BoundedProofsAreProofs : forall (P : Prop) N, (|-(N) P) -> |- P.
 Axiom OutsideProofBoundsAreLoose : forall (P : Prop) N N', N' > N -> (|-(N) P) -> (|-(N') P).
 Axiom ProofBoundsAreLoose : forall (P : Prop) N N', N' >= N -> [[ P ]]_N -> [[ P ]]_N'.
 
@@ -18,18 +25,18 @@ Parameter Log : nat -> nat.
 Axiom LogPos : forall n, 1 <= Log n. (* The sort of "log" useful in big-O notation... *)
 
 (* Property 1 - ModusPonensT *)
-Axiom ImplicationDistribution : exists c : nat, forall (P Q : Prop), forall a b, [[ P -> Q ]]_a -> [[ P ]]_b -> [[ Q ]]_(a+b+c).
+Axiom ImplicationDistribution : exists c : nat, forall (P Q : Prop), forall a b, |- [[ P -> Q ]]_a -> [[ P ]]_b -> [[ Q ]]_(a+b+c).
 
 (* Property 2 *)
 Axiom QuantifierDistribution :
-  exists c : nat, forall (phi : nat -> Prop) N, [[ forall k, phi k ]]_ N -> forall k, [[ phi k ]]_(c * Log k).
+  exists c : nat, forall (phi : nat -> Prop) N, |- [[ forall k, phi k ]]_ N -> forall k, [[ phi k ]]_(c * Log k).
 (* TODO: this is a little sketchy. There should be an additive constant dependent on N.
    See Section 4.2 in the paper. *)
 
 (* Property 2, for quantification restricted to numbers bounded below. TODO: verify that this is
    reasonable. *)
 Axiom RestrictedQuantifierDistribution :
-  exists c : nat, forall (phi : nat -> Prop) N k0, [[ forall k, k > k0 -> phi k ]]_ N -> forall k, k > k0 -> [[ phi k ]]_(c * Log k).
+  exists c : nat, forall (phi : nat -> Prop) N k0, |- [[ forall k, k > k0 -> phi k ]]_ N -> forall k, k > k0 -> [[ phi k ]]_(c * Log k).
 
 (* Epsilon - proof expansion bound *)
 Parameter Epsilon : nat -> nat.
@@ -40,14 +47,14 @@ Axiom BoundedNecessitation :
 
 (* Property 4 *)
 Axiom BoundedInnerNecessitation :
-  forall p k, [[ p ]]_ k -> [[ [[ p ]]_k ]]_(Epsilon k).
+  forall p k, |- [[ p ]]_ k -> [[ [[ p ]]_k ]]_(Epsilon k).
 
 (* Proposition 1 *)
 Parameter ParametricDiagonalLemmaPsi : 
   forall G : (nat -> Prop) -> nat -> Prop, nat -> Prop.
 Axiom ParametricDiagonalLemma :
   forall G : (nat -> Prop) -> nat -> Prop,
-      forall k, (ParametricDiagonalLemmaPsi G) k <-> G (ParametricDiagonalLemmaPsi G) k.
+      forall k, |- (ParametricDiagonalLemmaPsi G) k <-> G (ParametricDiagonalLemmaPsi G) k.
 
 Definition dominates (g : nat -> nat) (f : nat -> nat) :=
   forall M, exists N, forall n, n > N -> M * f n < g n.
@@ -90,7 +97,7 @@ Section BoundedLob.
   Variable f : nat -> nat.
   Hypothesis f_bound_below : f ≻ (fun k => Epsilon (Log k)).
 
-  Hypothesis Hyp : forall k, [[ p k ]]_(f k) -> p k.
+  Hypothesis Hyp : forall k, |- [[ p k ]]_(f k) -> p k.
   
 
   Parameter g : nat -> nat.
