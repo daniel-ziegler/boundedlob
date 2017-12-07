@@ -1,3 +1,4 @@
+Require Import PeanoNat.
 Require List.
 Require Import Relations.
 Import List.ListNotations.
@@ -843,6 +844,7 @@ Arguments var_outer {_} {_} {_} _.
 
 Definition x0 {Gamma t0} := @var (t0 :: Gamma) t0 var_here.
 Definition x1 {Gamma t0 t1} := @var (t0 :: t1 :: Gamma) t1 (var_outer var_here).
+Definition x2 {Gamma t0 t1 t2} := @var (t0 :: t1 :: t2 :: Gamma) t2 (var_outer (var_outer var_here)).
 
 Definition id t := abs x0 : expr [] (arrow t t).
 Definition K t1 t2 := abs (abs x1) : expr [] (arrow t1 (arrow t2 t1)).
@@ -863,13 +865,16 @@ Fixpoint encode_expr Gamma t (e: expr Gamma t) : Tree :=
   match e with
   | var v => ⋅ △ encode_var v
   | nil => ⋅
-  | eats e1 e2 => (⋅ △ ⋅) △ (encode_expr e1 △ encode_expr e2)
-  | abs e' => (⋅ △ ⋅ △ ⋅) △ encode_expr e'
-  | app e1 e2 => (⋅ △ (⋅ △ ⋅)) △ (encode_expr e1 △ encode_expr e2)
-  | recur ez ef et => ((⋅ △ ⋅) △ (⋅ △ ⋅)) △ (encode_expr ez △ encode_expr ef △ encode_expr et)
+  | eats e1 e2 => (⋅ △ (encode_expr e1 △ encode_expr e2)) △ ⋅ 
+  | abs e' => (⋅ △ ⋅) △ encode_expr e'
+  | app e1 e2 => (encode_expr e1 △ encode_expr e2) △ ⋅ △ ⋅
+  | recur ez ef et => encode_expr ez △ encode_expr ef △ (⋅ △ ⋅) △ encode_expr et
   end.
 
-Eval lazy in encode_expr flip.
+Eval lazy in encode_expr (abs (app x0 x1)).
+Eval lazy in encode_expr (abs (app x0 x2)).
+Definition omega_enc := ⋅ △ ⋅ △ (⋅ △ ⋅ △ (⋅ △ ⋅) △ ⋅ △ ⋅).
+Definition Omega_enc := (omega_enc △ omega_enc) △ ⋅ △ ⋅.
 
 Theorem encode_var_injective : forall Gamma t (v1 v2: variable Gamma t),
     encode_var v1 = encode_var v2 -> v1 = v2.
@@ -883,7 +888,7 @@ Proof.
 Qed.
 Hint Resolve encode_var_injective.
 
-(* 
+(*
 Theorem encode_expr_injective : forall Gamma t (e1 e2: expr Gamma t),
     encode_expr e1 = encode_expr e2 -> e1 = e2.
 Proof.
@@ -902,7 +907,6 @@ Fixpoint encoded_context_lookup (n: Tree) (c: list Tree) : option Tree :=
 
 (* TODO: does our interpreter need type tags at runtime?
    otherwise it can't do most runtime type checking, but maybe it doesn't need to *)
-(* TODO: we know it's terminating; fuel should be unnecessary *)
 Fixpoint eval_encoded_expr (fuel: nat) (c: list Tree) (e: Tree) {struct fuel} : option Tree :=
   match fuel with
   | O => None
@@ -910,18 +914,18 @@ Fixpoint eval_encoded_expr (fuel: nat) (c: list Tree) (e: Tree) {struct fuel} : 
     match e with
     | (* var v *) ⋅ △ v => encoded_context_lookup v c
     | (* nil *) ⋅ => Some ⋅
-    | (* eats e1 e2 *) (⋅ △ ⋅) △ (e1 △ e2) =>
+    | (* eats e1 e2 *) (⋅ △ (e1 △ e2)) △ ⋅ =>
       match eval_encoded_expr fuel' c e1, eval_encoded_expr fuel' c e2 with
       | Some t1, Some t2 => Some (t1 △ t2)
       | _, _ => None
       end
-    | (* abs e' *) (⋅ △ ⋅ △ ⋅) △ e' => Some e' (* no type tags -> ambiguous with tree values *)
-    | (* app ef ex *) (⋅ △ (⋅ △ ⋅)) △ (ef △ ex) =>
+    | (* abs e' *) (⋅ △ ⋅) △ e' => Some e' (* no type tags -> ambiguous with tree values *)
+    | (* app ef ex *) (ef △ ex) △ ⋅ △ ⋅ =>
       match eval_encoded_expr fuel' c ef, eval_encoded_expr fuel' c ex with
       | Some f, Some x => eval_encoded_expr fuel' (x :: c) f
       | _, _ => None
       end
-    | (* recur ez f et *) ((⋅ △ ⋅) △ (⋅ △ ⋅)) △ (ez △ f △ et) =>
+    | (* recur ez f et *) ez △ f △ (⋅ △ ⋅) △ et =>
       match eval_encoded_expr fuel' c et with
       | Some t => Tree_rec_nondep (eval_encoded_expr fuel' c ez)
                                  (fun (t1 t2: option Tree) =>
@@ -938,4 +942,91 @@ Fixpoint eval_encoded_expr (fuel: nat) (c: list Tree) (e: Tree) {struct fuel} : 
   end.
 
 Eval lazy in expr_denote empty_denote_context (app flip (nil ◁ nil ◁ nil)).
-Eval lazy in eval_encoded_expr 20 [] (encode_expr (app flip (nil ◁ nil ◁ nil))).
+Eval lazy in eval_encoded_expr 4 [] (encode_expr (app flip (nil ◁ nil ◁ nil))).
+
+Lemma val_eats_1 : forall Gamma (e1 e2: expr Gamma tree), val (e1 ◁ e2) -> val e1.
+Proof.
+  intros.
+  inversion H; auto.
+Qed.
+
+Lemma val_eats_2 : forall Gamma (e1 e2: expr Gamma tree), val (e1 ◁ e2) -> val e2.
+Proof.
+  intros.
+  inversion H; auto .
+Qed.
+
+(*
+Definition tree_val (x: expr [] tree) (Hv: val x) : Tree.
+  remember tree as t.
+  induction x; try abstract solve [ discriminate | exfalso; inversion Hv ].
+  - exact Nil.
+  - exact (Eats (IHx1 Heqt (val_eats_1 Hv)) (IHx2 Heqt (val_eats_2 Hv))).
+Defined.
+
+Theorem tree_val_correct : forall (x: expr [] tree) (Hv: val x),
+    tree_val Hv = expr_denote empty_denote_context x.
+Proof.
+*)
+
+(*
+Theorem eval_encoded_expr_S_fuel : forall c e fuel x,
+    eval_encoded_expr fuel c e = Some x -> eval_encoded_expr (S fuel) c e = Some x.
+Proof.
+  induction fuel; simpl; auto; intros; try discriminate.
+  destruct e; simpl in *; auto.
+  destruct e1; simpl in *; auto.
+  destruct e1_1; simpl in *; auto.
+    destruct e1_2; simpl in *; auto.
+    destruct e2; simpl in *; auto.
+    destruct (eval_encoded_expr fuel c e1_2_1) eqn:He121; try discriminate.
+    destruct (eval_encoded_expr fuel c e1_2_2) eqn:He122; try discriminate.
+    clear IHfuel.
+    inversion H; clear H; subst.
+Admitted.
+
+Theorem eval_encoded_expr_more_fuel : forall c e fuel fuel' x,
+    fuel' >= fuel ->
+    eval_encoded_expr fuel c e = Some x -> eval_encoded_expr fuel' c e = Some x.
+Proof.
+  induction 1; auto using eval_encoded_expr_S_fuel.
+Qed.
+
+Hint Resolve Nat.le_max_l Nat.le_max_r.
+
+Definition encoding_context Gamma := substitution Gamma [].
+
+Definition pop_context Gamma t0 (c: encoding_context (t0 :: Gamma)) : encoding_context Gamma :=
+  fun t (v: variable Gamma t) => c _ (var_outer v).
+
+Fixpoint encode_context Gamma : forall (c: encoding_context Gamma), list Tree :=
+  match Gamma with
+  | [] => fun c => []
+  | t :: Gamma' => fun c => encode_expr (c _ var_here) :: encode_context (pop_context c)
+  end.
+
+Definition encoding_context_denote Gamma (c: encoding_context Gamma) : denote_context Gamma :=
+  fun t (v: variable Gamma t) => expr_denote empty_denote_context (c _ v).
+
+Theorem eval_encoded_complete' : forall Gamma t (c: encoding_context Gamma) (e e': expr Gamma t) fuel,
+    apply_substitution c e |->* apply_substitution c e' ->
+    eval_encoded_expr fuel (encode_context c) (encode_expr e) = Some (expr_denote (encoding_context_denote c) e').
+Proof.
+
+Theorem eval_encoded_complete : forall (e e': expr [] tree),
+    e |->* e' ->
+    exists fuel, eval_encoded_expr fuel [] (encode_expr e) = Some (expr_denote empty_denote_context e').
+Proof.
+  induction 1; simpl.
+  - dependent induction x; simpl; try solve [ inversion v ].
+    + exists 1. auto.
+    + specialize (IHx1 x3 JMeq_refl eq_refl JMeq_refl); deex.
+      specialize (IHx2 x4 JMeq_refl eq_refl JMeq_refl); deex.
+      exists (1 + max fuel fuel0); simpl.
+      apply eval_encoded_expr_more_fuel with (fuel' := max fuel fuel0) in H; [ | auto ].
+      apply eval_encoded_expr_more_fuel with (fuel' := max fuel fuel0) in H0; [ | auto ].
+      rewrite H, H0.
+      reflexivity.
+    + specialize (IHx1 x3 JMeq_refl eq_refl JMeq_refl); deex.
+
+*)
