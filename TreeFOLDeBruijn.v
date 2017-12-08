@@ -12,6 +12,7 @@ Set Implicit Arguments.
 Inductive type :=
   | tree : type
   | arrow : type -> type -> type.
+Infix "-->" := arrow (at level 35, right associativity).
 
 Definition type_dec : forall (t1 t2: type), {t1=t2} + {t1<>t2}.
 Proof.
@@ -50,6 +51,8 @@ Inductive expr (Gamma: mapping) : type -> Type :=
       expr Gamma t.
 Arguments nil {Gamma}.
 Infix "◁" := eats (at level 15, left associativity).
+Infix "@" := app (at level 13, left associativity).
+Notation "'lambda' e" := (abs e) (at level 21, right associativity).
 
 Definition renaming Gamma Gamma' :=
   forall t (v: variable Gamma t), variable Gamma' t.
@@ -785,6 +788,95 @@ Proof.
   auto using hereditary_termination_terminating, exprs_ht.
 Qed.
 
+Definition eval_context Gamma := substitution Gamma [].
+
+Ltac break_match :=
+  match goal with
+  | [ |- context[match ?x with _ => _ end] ] => destruct x
+  end.
+
+Ltac solve_by_inversion :=
+  match goal with
+  | [ H : _ |- _ ] => solve [ inversion H ]
+  end.
+
+Fixpoint step_fn t (e: expr [] t) : expr [] t + {val e}.
+  refine (
+      match e with
+      | var v => _
+      | nil => inright ltac:(auto)
+      | e1 ◁ e2 =>
+        match step_fn _ e1 with
+        | inleft e1' => inleft (e1' ◁ e2)
+        | inright e1_val =>
+          match step_fn _ e2 with
+          | inleft e2' => inleft (e1 ◁ e2')
+          | inright e2_val => inright ltac:(auto)
+          end
+        end
+      | abs _ => inright ltac:(auto)
+      | ef @ ex =>
+        match step_fn _ ef with
+        | inleft ef' => inleft (ef' @ ex)
+        | inright ef_val =>
+          match step_fn _ ex with
+          | inleft ex' => inleft (ef @ ex')
+          | inright ex_val =>
+            match ef with
+            | var v => _
+            | nil => tt
+            | eats _ _ => tt
+            | abs e' => fun _ ex _ => inleft (subst_expr ex e')
+            | app _ _ => _
+            | recur _ _ _ => _
+            end ef_val ex ex_val
+          end
+        end
+      | recur ez ef et =>
+        match step_fn _ et with
+        | inleft et' => inleft (recur ez ef et')
+        | inright et_val => 
+          match et with
+          | var v => _
+          | nil => fun _ => inleft ez
+          | eats el er => fun _ => inleft (subst2_expr (recur ez ef el) (recur ez ef er) ef)
+          | abs _ => tt
+          | app _ _ => _
+          | recur _ _ _ => _
+          end et_val
+        end
+      end); try abstract (inversion v || break_match; try constructor; exfalso; solve_by_inversion ).
+  (* Why does the [refine] not leave these as goals?? *)
+  Grab Existential Variables.
+  all: clear step_fn; auto.
+  abstract (inversion v).
+Defined.
+
+Theorem step_fn_val : forall t (e: expr [] t),
+    val e ->
+    exists Hv, step_fn e = inright Hv.
+Proof.
+  induction 1; repeat deex; simpl; eexists; try reflexivity.
+  - rewrite H2, H1. reflexivity.
+Qed.
+
+Theorem step_fn_correct : forall t (e e': expr [] t),
+    step e e' -> step_fn e = inleft e'.
+Proof.
+  dependent induction e; simpl; intros; try solve_by_inversion.
+  - dependent destruction H.
+    + specialize (IHe1 _ JMeq_refl JMeq_refl _ H).
+      rewrite IHe1.
+      reflexivity.
+    + specialize (IHe2 _ JMeq_refl JMeq_refl _ H0).
+      rewrite IHe2.
+      destruct (step_fn_val H).
+      rewrite H1.
+      reflexivity.
+  - dependent destruction H.
+    (* etc etc *)
+Admitted.
+
 Inductive Tree := Nil | Eats (t e: Tree).
 
 Notation "⋅" := Nil.
@@ -846,14 +938,25 @@ Definition x0 {Gamma t0} := @var (t0 :: Gamma) t0 var_here.
 Definition x1 {Gamma t0 t1} := @var (t0 :: t1 :: Gamma) t1 (var_outer var_here).
 Definition x2 {Gamma t0 t1 t2} := @var (t0 :: t1 :: t2 :: Gamma) t2 (var_outer (var_outer var_here)).
 
-Definition id t := abs x0 : expr [] (arrow t t).
-Definition K t1 t2 := abs (abs x1) : expr [] (arrow t1 (arrow t2 t1)).
-Definition flip := abs (recur nil (x1 ◁ x0) x0) : expr [] (arrow tree tree).
+Definition id {Gamma} t := lambda x0 : expr Gamma (t --> t).
+Definition K {Gamma} t1 t2 := lambda lambda x1 : expr Gamma (t1 --> t2 --> t1).
+Definition flip {Gamma} := lambda recur nil (x1 ◁ x0) x0 : expr Gamma (tree --> tree).
 
 Eval lazy in expr_denote empty_denote_context (id tree).
-Eval lazy in expr_denote empty_denote_context (K tree (arrow tree tree)).
+Eval lazy in expr_denote empty_denote_context (K tree (tree --> tree)).
 Eval lazy in expr_denote empty_denote_context flip.
-Eval lazy in expr_denote empty_denote_context (app flip (nil ◁ nil ◁ nil)).
+Eval lazy in expr_denote empty_denote_context (flip @ (nil ◁ nil ◁ nil)).
+
+Notation succ := (fun e => e ◁ nil).
+Notation _0 := nil.
+Notation _1 := (succ _0).
+Notation _2 := (succ _1).
+Notation _3 := (succ _2).
+Notation _4 := (succ _3).
+
+Definition plus := lambda lambda recur x0 (succ x0) x1 : expr [] (tree --> tree --> tree).
+
+Eval lazy in expr_denote empty_denote_context (plus @ _2 @ _1).
 
 Fixpoint encode_var Gamma t (v: variable Gamma t) : Tree :=
   match v with
@@ -970,6 +1073,7 @@ Proof.
 *)
 
 (*
+(* see ~/dsrc/coq/Lisp.v see *)
 Theorem eval_encoded_expr_S_fuel : forall c e fuel x,
     eval_encoded_expr fuel c e = Some x -> eval_encoded_expr (S fuel) c e = Some x.
 Proof.
@@ -993,8 +1097,6 @@ Proof.
 Qed.
 
 Hint Resolve Nat.le_max_l Nat.le_max_r.
-
-Definition encoding_context Gamma := substitution Gamma [].
 
 Definition pop_context Gamma t0 (c: encoding_context (t0 :: Gamma)) : encoding_context Gamma :=
   fun t (v: variable Gamma t) => c _ (var_outer v).
